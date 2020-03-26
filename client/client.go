@@ -18,6 +18,8 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"io/ioutil"
+	"log"
 	"net"
 	"os"
 	"strings"
@@ -46,15 +48,41 @@ func main() {
 		// 服务器断开连接的时候, 才会往下执行
 		done <- struct{}{}
 	}()
+
 	// 这里不能使用 io.Copy 函数, 因为需要解析命令
 	input := bufio.NewScanner(os.Stdin)
 	for input.Scan() {
 		inputStr := input.Text()
 		// 将输入解析, 如果是命令的格式, 那么以命令的方式传递
 		subInput := strings.Fields(inputStr)
+		if len(subInput) < 1 {
+			continue
+		}
 		switch subInput[0] {
 		// 在这里只需要 upload-file, get-file 是需要上下文操作的, 其他的命令只需要传递过去让server处理
 		case "%upload-file": // 上传文件
+			// 先发送命令
+			SendBytesToServer(conn, []byte(inputStr))
+			// 然后上传文件
+			// 可以同时上传多个文件
+			if len(subInput) >= 2 {
+				for _, filename := range subInput[1:] {
+					// 打开文件, 计算字节
+					fileByte, err := ioutil.ReadFile(filename)
+					if err != nil {
+						log.Fatal(err)
+					}
+					fileByteLen := len(fileByte)
+					preSend := BytesCombine(BytesCombine(IntToBytes(fileByteLen)), fileByte)
+					_, err = conn.Write(preSend)
+					if err != nil {
+						log.Fatal(err)
+					}
+				}
+				fmt.Println("send over !")
+			} else {
+				fmt.Println("文件上传失败, 请给出文件名, 可同时上传多个文件")
+			}
 
 		case "%get-file": // 下载文件
 
@@ -66,19 +94,25 @@ func main() {
 		case "%ls": // 列出聊天室中所有的文件
 			fallthrough
 		default:
-			// 先计算数据长度, 然后拼接
-			length := len([]byte(inputStr))
-			preSend := BytesCombine(BytesCombine(IntToBytes(length)), []byte(inputStr))
-			_, err := conn.Write(preSend)
-			if err != nil {
-				panic(err)
-			}
+			// 发送命令
+			SendBytesToServer(conn, []byte(inputStr))
 		}
 	}
 	//if _, err := io.Copy(conn, os.Stdin); err != nil {
 	//	panic(err)
 	//}
 	<-done
+}
+
+// 向服务器发送命令
+// 先计算数据长度, 然后拼接
+func SendBytesToServer(conn net.Conn, inputStrByte []byte) {
+	length := len(inputStrByte)
+	preSend := BytesCombine(BytesCombine(IntToBytes(length)), inputStrByte)
+	_, err := conn.Write(preSend)
+	if err != nil {
+		panic(err)
+	}
 }
 
 // 合并两个 []byte

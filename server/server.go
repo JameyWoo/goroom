@@ -58,39 +58,59 @@ func handleConn(conn net.Conn) {
 	go clientWriter(conn, ch)
 
 	who := conn.RemoteAddr().String()
-	var alias string  // 用户自定义的别名
+	var alias string // 用户自定义的别名
 	ch <- "You are " + who
 	// * 要被广播的message, broadcaster 会捕捉
 	messages <- who + " has arrived"
 	entering <- ch // 表示新的用户进入了
 
 	for {
-		// 先读取 4 字节, 作为长度
-		lengthByte := make([]byte, 4)
-		length, _ := conn.Read(lengthByte)  // 忽略错误
-		if length != 4 {  // 读取 int 类型的长度
-			continue
-		}
-		length = BytesToInt(lengthByte)  // int 类型的长度
-		inputByte := make([]byte, length) // 输入命令
-		length, _ = conn.Read(inputByte)  // 忽略错误
+		inputByte := ReceiveByteFromClient(conn)
 		inputStr := string(inputByte)
 		// 将输入解析, 如果是命令的格式, 那么以命令的方式传递
 		subInput := strings.Fields(inputStr)
+		if len(subInput) < 1 {
+			// 用break而不是continue, continue 的话即使client断开了连接, 资源也不会释放
+			break
+		}
 
 		// 分别处理每一个命令
 		switch subInput[0] {
 		// 在这里只需要 upload-file, get-file 是需要上下文操作的, 其他的命令只需要传递过去让server处理
 		case "%upload-file": // 上传文件
+			if len(subInput) >= 2 {
+				for _, filename := range subInput[1:] {
+					// 首先判断文件是否存在, 如果存在那么无法写入
+					// filename 需要经过解析. 以 " / " 作为分隔符
+					subFilename := strings.Split(filename, "/")
+					newFilename := "./disk/" + subFilename[len(subFilename)-1]
+					if Exists(newFilename) {
+						// 如果存在, 那么取消上传该文件并通报
+						ch <- "服务器上存在同名文件 \"" + newFilename + " \", 请修改文件名后再上传!"
+						continue
+					}
+					// 打开文件, 计算字节
+					fileByte := ReceiveByteFromClient(conn)
+					newFile, err := os.Create(newFilename)
+					if err != nil {
+						log.Fatal(err)
+					}
+					_, err = newFile.Write(fileByte)
+					if err != nil {
+						log.Fatal(err)
+					}
+					newFile.Close()
+				}
+			}
 
 		case "%get-file": // 下载文件
 
 		case "%set-name": // 设置用户的名字
-			if len(subInput) >= 2 {  // 取 %set-name 之后的第一个字符串为名字
+			if len(subInput) >= 2 { // 取 %set-name 之后的第一个字符串为名字
 				alias = subInput[1]
-				ch <-"设置用户名 \"" + alias + " \"成功!"
+				ch <- "设置用户名 \"" + alias + " \"成功!"
 			} else {
-				ch <-"设置用户名失败! 请输入合法的用户名!"
+				ch <- "设置用户名失败! 请输入合法的用户名!"
 			}
 		case "%ls": // 列出聊天室中所有的文件
 			// TODO: 要注意这里如果在其他目录运行server.go, 这个目录还是否有效
@@ -103,11 +123,11 @@ func handleConn(conn net.Conn) {
 				filesStr += file.Name() + "\t"
 			}
 			// 这里是单独给当前客户端发送信息
-			ch <-filesStr
+			ch <- filesStr
 		default:
 			// 广播信息
 			if len(alias) > 0 {
-				messages <- who + "(" + alias + ")" +  ": " + inputStr
+				messages <- who + "(" + alias + ")" + ": " + inputStr
 			} else {
 				messages <- who + ": " + inputStr
 			}
@@ -128,6 +148,30 @@ func handleConn(conn net.Conn) {
 	leaving <- ch
 	messages <- who + alias + " has left"
 	conn.Close()
+}
+
+// 判断所给路径文件/文件夹是否存在
+func Exists(path string) bool {
+	_, err := os.Stat(path) //os.Stat获取文件信息
+	if err != nil {
+		if os.IsExist(err) {
+			return true
+		}
+		return false
+	}
+	return true
+}
+
+// 从客户端读取字节流
+func ReceiveByteFromClient(conn net.Conn) []byte {
+	// 先读取 4 字节, 作为长度
+	lengthByte := make([]byte, 4)
+	conn.Read(lengthByte)            // 忽略错误
+	length := BytesToInt(lengthByte) // int 类型的长度
+	// TODO: 注意这里如果是传输比较大的文件的话, 是否需要拆分成小的段?
+	inputByte := make([]byte, length) // 输入命令
+	length, _ = conn.Read(inputByte)  // 忽略错误
+	return inputByte
 }
 
 // 向客户端写入数据的协程
