@@ -15,10 +15,10 @@ type client chan<- string
 
 // 三个值, 分别是 进入, 离开, 要广播的消息. <-messages 是个 string 类型
 var (
-	entering = make(chan client)
-	leaving  = make(chan client)
-	messages = make(chan string) // all incoming client messages
-	downloading = make(map[client]bool)  // 下载状态不接收信息
+	entering    = make(chan client)
+	leaving     = make(chan client)
+	messages    = make(chan string)     // all incoming client messages
+	downloading = make(map[client]bool) // 下载状态不接收信息
 )
 
 func main() {
@@ -106,7 +106,7 @@ func handleConn(conn net.Conn) {
 			HandleUploadServer(subInput, conn, ch)
 
 		case "%download": // 下载文件
-			ch <-inputStr
+			ch <- inputStr
 			handleDownloadServer(subInput, conn, ch, downloading)
 
 		case "%set-name": // 设置用户的名字
@@ -118,6 +118,12 @@ func handleConn(conn net.Conn) {
 			}
 		case "%ls": // 列出聊天室中所有的文件
 			// TODO: 要注意这里如果在其他目录运行server.go, 这个目录还是否有效
+			if !utils.Exists("./disk") {
+				err := os.Mkdir("disk", os.ModePerm)
+				if err != nil {
+					log.Fatal(err)
+				}
+			}
 			files, err := ioutil.ReadDir("./disk")
 			if err != nil {
 				panic(err)
@@ -202,9 +208,9 @@ func handleDownloadServer(subInput []string, conn net.Conn, ch client, downloadi
 			}
 		}
 	} else {
-		ch <-"文件下载失败, 请给出文件名, 可同时下载多个文件"
+		ch <- "文件下载失败, 请给出文件名, 可同时下载多个文件"
 	}
-	downloading[ch] = false  // 下载结束, 可以接收信息
+	downloading[ch] = false // 下载结束, 可以接收信息
 }
 
 // 向客户端写入数据的协程
