@@ -2,12 +2,15 @@
 协议:
 用户可以执行命令, 以  %<command> args... 的形式
 如:
-	%set-name 姬小野
-	%get-file 十万个为什么.pdf
+	%ls                         // 查看server中的文件
+	%exit                       // 推出客户端
+	%set-name 姬小野             // 设置用户名
+	%download 十万个为什么.pdf    // 下载文件
+	%upload test.go             // 上传文件
+
 可以直接输入消息, 也就是除合法命令格式以外的消息, 都作为发送到chatroom的消息来发送
 
 由于tcp传输字节流, 因此在发送每个消息之前, 用一个 4字节 的数据声明要发送的消息的长度, 避免粘包.
-
 */
 
 package main
@@ -24,10 +27,6 @@ import (
 	"strings"
 )
 
-var (
-	downloading bool
-)
-
 func main() {
 	// 需要指定server的 ip 端口号
 	if len(os.Args) != 3 {
@@ -40,67 +39,7 @@ func main() {
 		panic(err)
 	}
 	done := make(chan struct{})
-	go func() {
-		// 将 conn 中的数据拷贝到 os.Stdout. 文件的拷贝也可以这样实现.
-		// 这是将 conn读取的数据输出的意思.
-		// ! 并且这个协程应该会一直读取, 而不会终止
-		//_, err := io.Copy(os.Stdout, conn)
-		//if err != nil {
-		//	panic(err)
-		//}
-		//input := bufio.NewScanner(conn)
-		//for input.Scan() {
-		//	fmt.Println(input.Text())
-		//}
-		for {
-			inputByte := ReceiveByteFromClient(conn)
-			inputStr := string(inputByte)
-			if inputStr[:9] == "%get-file" {
-				subInput := strings.Fields(inputStr)
-				if len(subInput) >= 2 {
-					for _, filename := range subInput[1:] {
-						fmt.Println("downloading " + filename + " ...")
-						// 首先判断文件是否存在, 如果存在那么无法写入
-						newFilename := "./disk/" + filename
-						if !Exists("./disk") {
-							// 如果 disk文件夹不存在, 那么创建
-							err := os.Mkdir("disk", os.ModePerm)
-							if err != nil {
-								log.Fatal(err)
-							}
-						}
-						if Exists(newFilename) {
-							// 如果存在, 那么取消上传该文件并通报
-							fmt.Println("服务器上存在同名文件 \"" + filename + " \", 将覆盖该文件!")
-							err := os.Remove(newFilename)
-							if err != nil {
-								log.Fatal(err)
-							}
-						}
-						// 打开文件, 计算字节
-						fileByte := ReceiveByteFromClient(conn)
-						fmt.Println("fileByte len:", len(fileByte))
-						newFile, err := os.Create(newFilename)
-						if err != nil {
-							log.Fatal(err)
-						}
-						_, err = newFile.Write(fileByte)
-						if err != nil {
-							log.Fatal(err)
-						} else {
-							fmt.Println("download " + filename + " successed!")
-						}
-						newFile.Close()
-					}
-				}
-			} else {
-				fmt.Println(inputStr)
-			}
-		}
-
-		// 服务器断开连接的时候, 才会往下执行
-		done <- struct{}{}
-	}()
+	go HandleOutput(conn, done)  // 处理输出, 包括文件输出(下载)
 
 	// 这里不能使用 io.Copy 函数, 因为需要解析命令
 	input := bufio.NewScanner(os.Stdin)
@@ -112,34 +51,92 @@ func main() {
 			continue
 		}
 		switch subInput[0] {
-		// 在这里只需要 upload-file, get-file 是需要上下文操作的, 其他的命令只需要传递过去让server处理
-		case "%upload-file": // 上传文件
-			HandleUploadFileClient(conn, inputStr, subInput)
+		// 在这里只需要 upload, download 是需要上下文操作的, 其他的命令只需要传递过去让server处理
+		case "%upload": // 上传文件
+			HandleUpload(conn, inputStr, subInput)
 
-		case "%get-file": // 下载文件
+		case "%download": // 下载文件
 			// 尝试
-			SendBytesToServer(conn, []byte(inputStr))
+			SendBytesToConn(conn, []byte(inputStr))
 
 		case "%exit": // 退出聊天室
 			return
-
 		case "%set-name": // 设置用户的名字
 			fallthrough
 		case "%ls": // 列出聊天室中所有的文件
 			fallthrough
 		default:
 			// 发送命令
-			SendBytesToServer(conn, []byte(inputStr))
+			SendBytesToConn(conn, []byte(inputStr))
 		}
 	}
-	//if _, err := io.Copy(conn, os.Stdin); err != nil {
-	//	panic(err)
-	//}
 	<-done
 }
 
+// 处理输出. 包括标准输出和文件输出
+func HandleOutput(conn net.Conn, done chan struct{}) {
+	for {
+		inputByte := ReceiveBytesFromConn(conn)
+		inputStr := string(inputByte)
+		if len(inputStr) < 9 {
+			fmt.Println(inputStr)
+		} else {
+			if inputStr[:9] == "%download" {
+				HandleDownload(inputStr, conn)
+			} else {
+				fmt.Println(inputStr)
+			}
+		}
+	}
+	// 服务器断开连接的时候, 才会往下执行
+	done <- struct{}{}
+}
+
+func HandleDownload(inputStr string, conn net.Conn) {
+	subInput := strings.Fields(inputStr)
+	if len(subInput) >= 2 {
+		for _, filename := range subInput[1:] {
+			fmt.Println("downloading " + filename + " ...")
+			// 首先判断文件是否存在, 如果存在那么无法写入
+			newFilename := "./disk/" + filename
+			if !Exists("./disk") {
+				// 如果 disk文件夹不存在, 那么创建
+				err := os.Mkdir("disk", os.ModePerm)
+				if err != nil {
+					log.Fatal(err)
+				}
+			}
+			// 打开文件, 计算字节
+			fileByte := ReceiveBytesFromConn(conn)
+			if len(fileByte) == 14 && string(fileByte) == "file not exist" {
+				fmt.Println("file \"" + filename + "\" not exist")
+			} else {
+				if Exists(newFilename) {
+					// 如果存在, 那么取消上传该文件并通报
+					fmt.Println("客户端上存在同名文件 \"" + filename + " \", 继续将覆盖该文件!")
+					err := os.Remove(newFilename)
+					if err != nil {
+						log.Fatal(err)
+					}
+				}
+				newFile, err := os.Create(newFilename)
+				if err != nil {
+					log.Fatal(err)
+				}
+				_, err = newFile.Write(fileByte)
+				if err != nil {
+					log.Fatal(err)
+				} else {
+					fmt.Println("download " + filename + " successed!")
+				}
+				newFile.Close()
+			}
+		}
+	}
+}
+
 // 从客户端读取字节流
-func ReceiveByteFromClient(conn net.Conn) []byte {
+func ReceiveBytesFromConn(conn net.Conn) []byte {
 	// 先读取 4 字节, 作为长度
 	lengthByte := make([]byte, 4)
 	conn.Read(lengthByte)            // 忽略错误
@@ -162,9 +159,9 @@ func Exists(path string) bool {
 	return true
 }
 
-func HandleUploadFileClient(conn net.Conn, inputStr string, subInput []string) {
+func HandleUpload(conn net.Conn, inputStr string, subInput []string) {
 	// 先发送命令
-	SendBytesToServer(conn, []byte(inputStr))
+	SendBytesToConn(conn, []byte(inputStr))
 	// 然后上传文件
 	// 可以同时上传多个文件
 	if len(subInput) >= 2 {
@@ -189,7 +186,7 @@ func HandleUploadFileClient(conn net.Conn, inputStr string, subInput []string) {
 
 // 向服务器发送命令
 // 先计算数据长度, 然后拼接
-func SendBytesToServer(conn net.Conn, inputStrByte []byte) {
+func SendBytesToConn(conn net.Conn, inputStrByte []byte) {
 	length := len(inputStrByte)
 	preSend := BytesCombine(IntToBytes(length), inputStrByte)
 	_, err := conn.Write(preSend)

@@ -24,6 +24,28 @@ var (
 	downloading = make(map[client]bool)  // 下载状态不接收信息
 )
 
+func main() {
+	// 命令行参数, 指定运行端口
+	if len(os.Args) != 2 {
+		fmt.Printf("Usage : %s <port>\n", os.Args[0])
+		os.Exit(1)
+	}
+	listener, err := net.Listen("tcp", "localhost:"+os.Args[1])
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	go broadcaster()
+	for {
+		conn, err := listener.Accept()
+		if err != nil {
+			log.Print(err)
+			continue
+		}
+		go handleConn(conn)
+	}
+}
+
 // 广播的协程, 处理三种信号: 广播, 进入, 离开
 func broadcaster() {
 	// 遍历 clients 的话, 以 client 也就是 chan client 为键
@@ -31,8 +53,6 @@ func broadcaster() {
 	for {
 		select {
 		case msg := <-messages:
-			// Broadcast incoming message to all
-			// clients' outgoing message channels.
 			// ! 注意, 这里msg是字符串, 而不是 chan !!! 所以可以给每个 cli 赋值!!!
 			// 打印服务端信息
 			fmt.Println(msg)
@@ -73,7 +93,7 @@ func handleConn(conn net.Conn) {
 	entering <- ch // 表示新的用户进入了
 
 	for {
-		inputByte := ReceiveByteFromClient(conn)
+		inputByte := ReceiveBytesFromConn(conn)
 		inputStr := string(inputByte)
 		// 将输入解析, 如果是命令的格式, 那么以命令的方式传递
 		subInput := strings.Fields(inputStr)
@@ -84,35 +104,13 @@ func handleConn(conn net.Conn) {
 
 		// 分别处理每一个命令
 		switch subInput[0] {
-		// 在这里只需要 upload-file, get-file 是需要上下文操作的, 其他的命令只需要传递过去让server处理
-		case "%upload-file": // 上传文件
-			HandleUploadFileServer(subInput, conn, ch)
+		// 在这里只需要 upload, download  是需要上下文操作的, 其他的命令只需要传递过去让server处理
+		case "%upload": // 上传文件
+			HandleUploadServer(subInput, conn, ch)
 
-		case "%get-file": // 下载文件
+		case "%download": // 下载文件
 			ch <-inputStr
-			//SendBytesToServer(conn, inputByte)
-			if len(subInput) >= 2 {
-				downloading[ch] = true
-				// TODO: 有的文件是不存在的, 需要加一个检测, 否则会终止程序
-				for _, filename := range subInput[1:] {
-					// 打开文件, 计算字节
-					newFilename := "disk/" + filename
-					fileByte, err := ioutil.ReadFile(newFilename)
-					if err != nil {
-						log.Fatal(err)
-					}
-					fileByteLen := len(fileByte)
-					preSend := BytesCombine(IntToBytes(fileByteLen), fileByte)
-					_, err = conn.Write(preSend)
-					if err != nil {
-						log.Fatal(err)
-					}
-				}
-			} else {
-				ch <-"文件下载失败, 请给出文件名, 可同时下载多个文件"
-			}
-			downloading[ch] = false  // 下载结束, 可以接收信息
-
+			handleDownloadServer(subInput, conn, ch, downloading)
 
 		case "%set-name": // 设置用户的名字
 			if len(subInput) >= 2 { // 取 %set-name 之后的第一个字符串为名字
@@ -148,18 +146,7 @@ func handleConn(conn net.Conn) {
 	conn.Close()
 }
 
-// 向服务器发送命令
-// 先计算数据长度, 然后拼接
-func SendBytesToServer(conn net.Conn, inputStrByte []byte) {
-	length := len(inputStrByte)
-	preSend := BytesCombine(IntToBytes(length), inputStrByte)
-	_, err := conn.Write(preSend)
-	if err != nil {
-		panic(err)
-	}
-}
-
-func HandleUploadFileServer(subInput []string, conn net.Conn, ch client) {
+func HandleUploadServer(subInput []string, conn net.Conn, ch client) {
 	if len(subInput) >= 2 {
 		for _, filename := range subInput[1:] {
 			// 首先判断文件是否存在, 如果存在那么无法写入
@@ -182,7 +169,7 @@ func HandleUploadFileServer(subInput []string, conn net.Conn, ch client) {
 				}
 			}
 			// 打开文件, 计算字节
-			fileByte := ReceiveByteFromClient(conn)
+			fileByte := ReceiveBytesFromConn(conn)
 			newFile, err := os.Create(newFilename)
 			if err != nil {
 				log.Fatal(err)
@@ -198,6 +185,31 @@ func HandleUploadFileServer(subInput []string, conn net.Conn, ch client) {
 	}
 }
 
+func handleDownloadServer(subInput []string, conn net.Conn, ch client, downloading map[client]bool) {
+	if len(subInput) >= 2 {
+		downloading[ch] = true
+		// TODO: 有的文件是不存在的, 需要加一个检测, 否则会终止程序
+		for _, filename := range subInput[1:] {
+			// 打开文件, 计算字节
+			newFilename := "disk/" + filename
+			fileByte, err := ioutil.ReadFile(newFilename)
+			if err != nil {
+				ch <- "file not exist"
+				continue
+			}
+			fileByteLen := len(fileByte)
+			preSend := BytesCombine(IntToBytes(fileByteLen), fileByte)
+			_, err = conn.Write(preSend)
+			if err != nil {
+				log.Fatal(err)
+			}
+		}
+	} else {
+		ch <-"文件下载失败, 请给出文件名, 可同时下载多个文件"
+	}
+	downloading[ch] = false  // 下载结束, 可以接收信息
+}
+
 // 判断所给路径文件/文件夹是否存在
 func Exists(path string) bool {
 	_, err := os.Stat(path) //os.Stat获取文件信息
@@ -211,7 +223,7 @@ func Exists(path string) bool {
 }
 
 // 从客户端读取字节流
-func ReceiveByteFromClient(conn net.Conn) []byte {
+func ReceiveBytesFromConn(conn net.Conn) []byte {
 	// 先读取 4 字节, 作为长度
 	lengthByte := make([]byte, 4)
 	conn.Read(lengthByte)            // 忽略错误
@@ -238,28 +250,6 @@ func clientWriter(conn net.Conn, ch <-chan string) {
 		//	log.Fatal(err)
 		//}
 		//fmt.Println("cnt:", cnt)
-	}
-}
-
-func main() {
-	// 命令行参数, 指定运行端口
-	if len(os.Args) != 2 {
-		fmt.Printf("Usage : %s <port>\n", os.Args[0])
-		os.Exit(1)
-	}
-	listener, err := net.Listen("tcp", "localhost:"+os.Args[1])
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	go broadcaster()
-	for {
-		conn, err := listener.Accept()
-		if err != nil {
-			log.Print(err)
-			continue
-		}
-		go handleConn(conn)
 	}
 }
 
