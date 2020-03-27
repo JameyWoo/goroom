@@ -1,10 +1,58 @@
-写一个简单的chat程序，并能互传文件，编程语言不限。
+# go room
+A simple chat room implemented in golang.
 
-我的想法是以一个server作为中心, 然后client通过连接server发送数据, server再广播发到每一个正在连接的client, 形成聊天室.
 
-可以传输文件, 但是也是以群的方式进行传输的, 文件首先传输到 server, 然后通知每个人谁传输了文件到server, 其他的人可以通过命令获取.
 
-因此需要自定义一些协议. 比如如果想执行命令的时候, 需要在前面加符号 `%get-file <file_name>`, 形成一个命令.
+## Usage
 
-如何避免粘包的问题呢? 
-定义
+### server
+
+```
+cd ./server
+go run server.go 6666
+```
+
+Your service will listen on port 6666.
+
+The default save location for file uploads is ``./server/disk` 
+
+
+
+## client
+
+```
+cd ./client
+go run client.go 127.0.0.1 6666
+```
+
+The client will connect to the server with the IP address 127.0.0.1 and the port set to 6666.
+
+
+
+## Protocol
+
+### send messages
+
+Users can send messages to the chat room, and everyone who logs in to the chat room can receive the message.
+
+Messages other than legal command formats are sent as messages sent to chatroom
+
+
+
+### commands
+
+Users can execute commands as `%<command> args` to do something
+
+such as:
+```
+%ls                         // View files in server
+%exit                       // Exit client
+%set-name username          // Set username
+%download whyIsThat.pdf     // Download file
+%upload test.go             // Upload file
+```
+
+Because TCP transmits a stream of bytes, before sending each message, use a 4-byte data to declare the length of the message to be sent to avoid sticky packets.
+
+
+
