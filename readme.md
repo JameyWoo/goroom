@@ -1,7 +1,7 @@
 # go room
 A simple chat room implemented in golang.
 
-
+![](https://img.shields.io/badge/language-golang-brightgreen.svg?style=plastic)
 
 ## Usage
 
@@ -14,7 +14,7 @@ go run server.go 6666
 
 Your service will listen on port 6666.
 
-The default save location for file uploads is ``./server/disk` 
+The default save location for file uploads is `./server/disk` 
 
 
 
