@@ -16,9 +16,8 @@
 package main
 
 import (
+	"../utils"
 	"bufio"
-	"bytes"
-	"encoding/binary"
 	"fmt"
 	"io/ioutil"
 	"log"
@@ -57,7 +56,7 @@ func main() {
 
 		case "%download": // 下载文件
 			// 尝试
-			SendBytesToConn(conn, []byte(inputStr))
+			utils.SendBytesToConn(conn, []byte(inputStr))
 
 		case "%exit": // 退出聊天室
 			return
@@ -67,7 +66,7 @@ func main() {
 			fallthrough
 		default:
 			// 发送命令
-			SendBytesToConn(conn, []byte(inputStr))
+			utils.SendBytesToConn(conn, []byte(inputStr))
 		}
 	}
 	<-done
@@ -76,7 +75,7 @@ func main() {
 // 处理输出. 包括标准输出和文件输出
 func HandleOutput(conn net.Conn, done chan struct{}) {
 	for {
-		inputByte := ReceiveBytesFromConn(conn)
+		inputByte := utils.ReceiveBytesFromConn(conn)
 		inputStr := string(inputByte)
 		if len(inputStr) < 9 {
 			fmt.Println(inputStr)
@@ -87,6 +86,7 @@ func HandleOutput(conn net.Conn, done chan struct{}) {
 				fmt.Println(inputStr)
 			}
 		}
+		fmt.Print("$ ")
 	}
 	// 服务器断开连接的时候, 才会往下执行
 	done <- struct{}{}
@@ -99,7 +99,7 @@ func HandleDownload(inputStr string, conn net.Conn) {
 			fmt.Println("downloading " + filename + " ...")
 			// 首先判断文件是否存在, 如果存在那么无法写入
 			newFilename := "./disk/" + filename
-			if !Exists("./disk") {
+			if !utils.Exists("./disk") {
 				// 如果 disk文件夹不存在, 那么创建
 				err := os.Mkdir("disk", os.ModePerm)
 				if err != nil {
@@ -107,11 +107,11 @@ func HandleDownload(inputStr string, conn net.Conn) {
 				}
 			}
 			// 打开文件, 计算字节
-			fileByte := ReceiveBytesFromConn(conn)
+			fileByte := utils.ReceiveBytesFromConn(conn)
 			if len(fileByte) == 14 && string(fileByte) == "file not exist" {
 				fmt.Println("file \"" + filename + "\" not exist")
 			} else {
-				if Exists(newFilename) {
+				if utils.Exists(newFilename) {
 					// 如果存在, 那么取消上传该文件并通报
 					fmt.Println("客户端上存在同名文件 \"" + filename + " \", 继续将覆盖该文件!")
 					err := os.Remove(newFilename)
@@ -135,33 +135,9 @@ func HandleDownload(inputStr string, conn net.Conn) {
 	}
 }
 
-// 从客户端读取字节流
-func ReceiveBytesFromConn(conn net.Conn) []byte {
-	// 先读取 4 字节, 作为长度
-	lengthByte := make([]byte, 4)
-	conn.Read(lengthByte)            // 忽略错误
-	length := BytesToInt(lengthByte) // int 类型的长度
-	// TODO: 注意这里如果是传输比较大的文件的话, 是否需要拆分成小的段?
-	inputByte := make([]byte, length) // 输入命令
-	length, _ = conn.Read(inputByte)  // 忽略错误
-	return inputByte
-}
-
-// 判断所给路径文件/文件夹是否存在
-func Exists(path string) bool {
-	_, err := os.Stat(path) //os.Stat获取文件信息
-	if err != nil {
-		if os.IsExist(err) {
-			return true
-		}
-		return false
-	}
-	return true
-}
-
 func HandleUpload(conn net.Conn, inputStr string, subInput []string) {
 	// 先发送命令
-	SendBytesToConn(conn, []byte(inputStr))
+	utils.SendBytesToConn(conn, []byte(inputStr))
 	// 然后上传文件
 	// 可以同时上传多个文件
 	if len(subInput) >= 2 {
@@ -173,7 +149,7 @@ func HandleUpload(conn net.Conn, inputStr string, subInput []string) {
 				log.Fatal(err)
 			}
 			fileByteLen := len(fileByte)
-			preSend := BytesCombine(BytesCombine(IntToBytes(fileByteLen)), fileByte)
+			preSend := utils.BytesCombine(utils.IntToBytes(fileByteLen), fileByte)
 			_, err = conn.Write(preSend)
 			if err != nil {
 				log.Fatal(err)
@@ -182,39 +158,4 @@ func HandleUpload(conn net.Conn, inputStr string, subInput []string) {
 	} else {
 		fmt.Println("文件上传失败, 请给出文件名, 可同时上传多个文件")
 	}
-}
-
-// 向服务器发送命令
-// 先计算数据长度, 然后拼接
-func SendBytesToConn(conn net.Conn, inputStrByte []byte) {
-	length := len(inputStrByte)
-	preSend := BytesCombine(IntToBytes(length), inputStrByte)
-	_, err := conn.Write(preSend)
-	if err != nil {
-		panic(err)
-	}
-}
-
-// 合并两个 []byte
-func BytesCombine(pBytes ...[]byte) []byte {
-	return bytes.Join(pBytes, []byte(""))
-}
-
-//整形转换成字节
-func IntToBytes(n int) []byte {
-	x := int32(n)
-
-	bytesBuffer := bytes.NewBuffer([]byte{})
-	binary.Write(bytesBuffer, binary.BigEndian, x)
-	return bytesBuffer.Bytes()
-}
-
-//字节转换成整形
-func BytesToInt(b []byte) int {
-	bytesBuffer := bytes.NewBuffer(b)
-
-	var x int32
-	binary.Read(bytesBuffer, binary.BigEndian, &x)
-
-	return int(x)
 }

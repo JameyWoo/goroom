@@ -1,10 +1,7 @@
-// 不错的博客: https://blog.csdn.net/yjp19871013/article/details/82711237
-// TODO: 发现一个bug, 用 panic 会造成server终止, 当client的连接中断时, 应该忽略错误
 package main
 
 import (
-	"bytes"
-	"encoding/binary"
+	"../utils"
 	"fmt"
 	"io/ioutil"
 	"log"
@@ -93,7 +90,7 @@ func handleConn(conn net.Conn) {
 	entering <- ch // 表示新的用户进入了
 
 	for {
-		inputByte := ReceiveBytesFromConn(conn)
+		inputByte := utils.ReceiveBytesFromConn(conn)
 		inputStr := string(inputByte)
 		// 将输入解析, 如果是命令的格式, 那么以命令的方式传递
 		subInput := strings.Fields(inputStr)
@@ -142,7 +139,7 @@ func handleConn(conn net.Conn) {
 	}
 	// ! .Scan() 为false之后, 不再输入, 说明socket断开连接, 告知离开
 	leaving <- ch
-	messages <- who + alias + " has left"
+	messages <- who + "(" + alias + ")" + " has left"
 	conn.Close()
 }
 
@@ -153,14 +150,14 @@ func HandleUploadServer(subInput []string, conn net.Conn, ch client) {
 			// filename 需要经过解析. 以 " / " 作为分隔符
 			subFilename := strings.Split(filename, "/")
 			newFilename := "./disk/" + subFilename[len(subFilename)-1]
-			if !Exists("./disk") {
+			if !utils.Exists("./disk") {
 				// 如果 disk文件夹不存在, 那么创建
 				err := os.Mkdir("disk", os.ModePerm)
 				if err != nil {
 					log.Fatal(err)
 				}
 			}
-			if Exists(newFilename) {
+			if utils.Exists(newFilename) {
 				// 如果存在, 那么取消上传该文件并通报
 				ch <- "服务器上存在同名文件 \"" + subFilename[len(subFilename)-1] + " \", 将覆盖该文件!"
 				err := os.Remove(newFilename)
@@ -169,7 +166,7 @@ func HandleUploadServer(subInput []string, conn net.Conn, ch client) {
 				}
 			}
 			// 打开文件, 计算字节
-			fileByte := ReceiveBytesFromConn(conn)
+			fileByte := utils.ReceiveBytesFromConn(conn)
 			newFile, err := os.Create(newFilename)
 			if err != nil {
 				log.Fatal(err)
@@ -198,7 +195,7 @@ func handleDownloadServer(subInput []string, conn net.Conn, ch client, downloadi
 				continue
 			}
 			fileByteLen := len(fileByte)
-			preSend := BytesCombine(IntToBytes(fileByteLen), fileByte)
+			preSend := utils.BytesCombine(utils.IntToBytes(fileByteLen), fileByte)
 			_, err = conn.Write(preSend)
 			if err != nil {
 				log.Fatal(err)
@@ -210,69 +207,13 @@ func handleDownloadServer(subInput []string, conn net.Conn, ch client, downloadi
 	downloading[ch] = false  // 下载结束, 可以接收信息
 }
 
-// 判断所给路径文件/文件夹是否存在
-func Exists(path string) bool {
-	_, err := os.Stat(path) //os.Stat获取文件信息
-	if err != nil {
-		if os.IsExist(err) {
-			return true
-		}
-		return false
-	}
-	return true
-}
-
-// 从客户端读取字节流
-func ReceiveBytesFromConn(conn net.Conn) []byte {
-	// 先读取 4 字节, 作为长度
-	lengthByte := make([]byte, 4)
-	conn.Read(lengthByte)            // 忽略错误
-	length := BytesToInt(lengthByte) // int 类型的长度
-	// TODO: 注意这里如果是传输比较大的文件的话, 是否需要拆分成小的段?
-	inputByte := make([]byte, length) // 输入命令
-	length, _ = conn.Read(inputByte)  // 忽略错误
-	return inputByte
-}
-
 // 向客户端写入数据的协程
 // ! ch循环阻塞, 知道ch被传入了数据, 这个协程不会直接终止
 func clientWriter(conn net.Conn, ch <-chan string) {
 	// * range 遍历, 当 ch 为空的时候, 这个语句会阻塞. 当 ch 得到了值, 他又会醒过来
 	for msg := range ch {
 		msgByte := []byte(msg)
-		msgByteNew := BytesCombine(IntToBytes(len(msgByte)), msgByte)
-		//fmt.Println("--" + string(msgByteNew) + "--")
+		msgByteNew := utils.BytesCombine(utils.IntToBytes(len(msgByte)), msgByte)
 		conn.Write(msgByteNew)
-		//fmt.Fprintln(conn, msgByteNew)
-		//fmt.Println("fuck it")
-		//cnt, err := conn.Write(msgByteNew)
-		//if err != nil {
-		//	log.Fatal(err)
-		//}
-		//fmt.Println("cnt:", cnt)
 	}
-}
-
-// 合并两个 []byte
-func BytesCombine(pBytes ...[]byte) []byte {
-	return bytes.Join(pBytes, []byte(""))
-}
-
-//整形转换成字节
-func IntToBytes(n int) []byte {
-	x := int32(n)
-
-	bytesBuffer := bytes.NewBuffer([]byte{})
-	binary.Write(bytesBuffer, binary.BigEndian, x)
-	return bytesBuffer.Bytes()
-}
-
-//字节转换成整形
-func BytesToInt(b []byte) int {
-	bytesBuffer := bytes.NewBuffer(b)
-
-	var x int32
-	binary.Read(bytesBuffer, binary.BigEndian, &x)
-
-	return int(x)
 }
