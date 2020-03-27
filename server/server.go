@@ -21,6 +21,7 @@ var (
 	entering = make(chan client)
 	leaving  = make(chan client)
 	messages = make(chan string) // all incoming client messages
+	downloading = make(map[client]bool)  // 下载状态不接收信息
 )
 
 // 广播的协程, 处理三种信号: 广播, 进入, 离开
@@ -37,16 +38,23 @@ func broadcaster() {
 			fmt.Println(msg)
 			for cli := range clients {
 				// ! 会继续执行阻塞的 clientWriter 函数
-				cli <- msg
+				// 设置一个下载状态
+				if !downloading[cli] {
+					cli <- msg
+				} else {
+					fmt.Println("file downloading")
+				}
 			}
 		// 有客户端进入
 		// ! 注意, 这里的键是 entering 传递来的, 而 entering 是从 handleConn中声明的 ch传递过来的
 		// ! chan 是一个引用类型, 所以把那个ch传递来, 在上面改编了cli的话, 就会继续执行clientWriter里的循环输出
 		case cli := <-entering:
 			clients[cli] = true
+			downloading[cli] = false
 		// 有客户端离开
 		case cli := <-leaving:
 			delete(clients, cli)
+			delete(downloading, cli)
 			close(cli)
 		}
 	}
@@ -78,32 +86,33 @@ func handleConn(conn net.Conn) {
 		switch subInput[0] {
 		// 在这里只需要 upload-file, get-file 是需要上下文操作的, 其他的命令只需要传递过去让server处理
 		case "%upload-file": // 上传文件
-			if len(subInput) >= 2 {
-				for _, filename := range subInput[1:] {
-					// 首先判断文件是否存在, 如果存在那么无法写入
-					// filename 需要经过解析. 以 " / " 作为分隔符
-					subFilename := strings.Split(filename, "/")
-					newFilename := "./disk/" + subFilename[len(subFilename)-1]
-					if Exists(newFilename) {
-						// 如果存在, 那么取消上传该文件并通报
-						ch <- "服务器上存在同名文件 \"" + newFilename + " \", 请修改文件名后再上传!"
-						continue
-					}
-					// 打开文件, 计算字节
-					fileByte := ReceiveByteFromClient(conn)
-					newFile, err := os.Create(newFilename)
-					if err != nil {
-						log.Fatal(err)
-					}
-					_, err = newFile.Write(fileByte)
-					if err != nil {
-						log.Fatal(err)
-					}
-					newFile.Close()
-				}
-			}
+			HandleUploadFileServer(subInput, conn, ch)
 
 		case "%get-file": // 下载文件
+			ch <-inputStr
+			//SendBytesToServer(conn, inputByte)
+			if len(subInput) >= 2 {
+				downloading[ch] = true
+				// TODO: 有的文件是不存在的, 需要加一个检测, 否则会终止程序
+				for _, filename := range subInput[1:] {
+					// 打开文件, 计算字节
+					newFilename := "disk/" + filename
+					fileByte, err := ioutil.ReadFile(newFilename)
+					if err != nil {
+						log.Fatal(err)
+					}
+					fileByteLen := len(fileByte)
+					preSend := BytesCombine(IntToBytes(fileByteLen), fileByte)
+					_, err = conn.Write(preSend)
+					if err != nil {
+						log.Fatal(err)
+					}
+				}
+			} else {
+				ch <-"文件下载失败, 请给出文件名, 可同时下载多个文件"
+			}
+			downloading[ch] = false  // 下载结束, 可以接收信息
+
 
 		case "%set-name": // 设置用户的名字
 			if len(subInput) >= 2 { // 取 %set-name 之后的第一个字符串为名字
@@ -133,21 +142,60 @@ func handleConn(conn net.Conn) {
 			}
 		}
 	}
-
-	//// ! 读取网络输入, 然后传递给message用以广播
-	//input := bufio.NewScanner(conn)
-	//// .Scan() 函数为true时, 代表在输入, 否则代表不输入了(应该是文件关闭了)
-	//// ! 这里实现的是服务端读取客户端的网络输入, 并将其传递给messages用以广播
-	//for input.Scan() {
-	//
-	//	messages <- who + ": " + input.Text()
-	//}
-	// NOTE: ignoring potential errors from input.Err()
-
 	// ! .Scan() 为false之后, 不再输入, 说明socket断开连接, 告知离开
 	leaving <- ch
 	messages <- who + alias + " has left"
 	conn.Close()
+}
+
+// 向服务器发送命令
+// 先计算数据长度, 然后拼接
+func SendBytesToServer(conn net.Conn, inputStrByte []byte) {
+	length := len(inputStrByte)
+	preSend := BytesCombine(IntToBytes(length), inputStrByte)
+	_, err := conn.Write(preSend)
+	if err != nil {
+		panic(err)
+	}
+}
+
+func HandleUploadFileServer(subInput []string, conn net.Conn, ch client) {
+	if len(subInput) >= 2 {
+		for _, filename := range subInput[1:] {
+			// 首先判断文件是否存在, 如果存在那么无法写入
+			// filename 需要经过解析. 以 " / " 作为分隔符
+			subFilename := strings.Split(filename, "/")
+			newFilename := "./disk/" + subFilename[len(subFilename)-1]
+			if !Exists("./disk") {
+				// 如果 disk文件夹不存在, 那么创建
+				err := os.Mkdir("disk", os.ModePerm)
+				if err != nil {
+					log.Fatal(err)
+				}
+			}
+			if Exists(newFilename) {
+				// 如果存在, 那么取消上传该文件并通报
+				ch <- "服务器上存在同名文件 \"" + subFilename[len(subFilename)-1] + " \", 将覆盖该文件!"
+				err := os.Remove(newFilename)
+				if err != nil {
+					log.Fatal(err)
+				}
+			}
+			// 打开文件, 计算字节
+			fileByte := ReceiveByteFromClient(conn)
+			newFile, err := os.Create(newFilename)
+			if err != nil {
+				log.Fatal(err)
+			}
+			_, err = newFile.Write(fileByte)
+			if err != nil {
+				log.Fatal(err)
+			} else {
+				ch <- "upload " + filename + " successed!"
+			}
+			newFile.Close()
+		}
+	}
 }
 
 // 判断所给路径文件/文件夹是否存在
@@ -179,8 +227,17 @@ func ReceiveByteFromClient(conn net.Conn) []byte {
 func clientWriter(conn net.Conn, ch <-chan string) {
 	// * range 遍历, 当 ch 为空的时候, 这个语句会阻塞. 当 ch 得到了值, 他又会醒过来
 	for msg := range ch {
-		// 输出到客户端
-		fmt.Fprintln(conn, msg)
+		msgByte := []byte(msg)
+		msgByteNew := BytesCombine(IntToBytes(len(msgByte)), msgByte)
+		//fmt.Println("--" + string(msgByteNew) + "--")
+		conn.Write(msgByteNew)
+		//fmt.Fprintln(conn, msgByteNew)
+		//fmt.Println("fuck it")
+		//cnt, err := conn.Write(msgByteNew)
+		//if err != nil {
+		//	log.Fatal(err)
+		//}
+		//fmt.Println("cnt:", cnt)
 	}
 }
 
@@ -204,6 +261,11 @@ func main() {
 		}
 		go handleConn(conn)
 	}
+}
+
+// 合并两个 []byte
+func BytesCombine(pBytes ...[]byte) []byte {
+	return bytes.Join(pBytes, []byte(""))
 }
 
 //整形转换成字节

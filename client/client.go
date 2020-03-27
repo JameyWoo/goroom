@@ -17,12 +17,15 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
-	"io"
 	"io/ioutil"
 	"log"
 	"net"
 	"os"
 	"strings"
+)
+
+var (
+	downloading bool
 )
 
 func main() {
@@ -41,10 +44,60 @@ func main() {
 		// 将 conn 中的数据拷贝到 os.Stdout. 文件的拷贝也可以这样实现.
 		// 这是将 conn读取的数据输出的意思.
 		// ! 并且这个协程应该会一直读取, 而不会终止
-		_, err := io.Copy(os.Stdout, conn)
-		if err != nil {
-			panic(err)
+		//_, err := io.Copy(os.Stdout, conn)
+		//if err != nil {
+		//	panic(err)
+		//}
+		//input := bufio.NewScanner(conn)
+		//for input.Scan() {
+		//	fmt.Println(input.Text())
+		//}
+		for {
+			inputByte := ReceiveByteFromClient(conn)
+			inputStr := string(inputByte)
+			if inputStr[:9] == "%get-file" {
+				subInput := strings.Fields(inputStr)
+				if len(subInput) >= 2 {
+					for _, filename := range subInput[1:] {
+						fmt.Println("downloading " + filename + " ...")
+						// 首先判断文件是否存在, 如果存在那么无法写入
+						newFilename := "./disk/" + filename
+						if !Exists("./disk") {
+							// 如果 disk文件夹不存在, 那么创建
+							err := os.Mkdir("disk", os.ModePerm)
+							if err != nil {
+								log.Fatal(err)
+							}
+						}
+						if Exists(newFilename) {
+							// 如果存在, 那么取消上传该文件并通报
+							fmt.Println("服务器上存在同名文件 \"" + filename + " \", 将覆盖该文件!")
+							err := os.Remove(newFilename)
+							if err != nil {
+								log.Fatal(err)
+							}
+						}
+						// 打开文件, 计算字节
+						fileByte := ReceiveByteFromClient(conn)
+						fmt.Println("fileByte len:", len(fileByte))
+						newFile, err := os.Create(newFilename)
+						if err != nil {
+							log.Fatal(err)
+						}
+						_, err = newFile.Write(fileByte)
+						if err != nil {
+							log.Fatal(err)
+						} else {
+							fmt.Println("download " + filename + " successed!")
+						}
+						newFile.Close()
+					}
+				}
+			} else {
+				fmt.Println(inputStr)
+			}
 		}
+
 		// 服务器断开连接的时候, 才会往下执行
 		done <- struct{}{}
 	}()
@@ -61,30 +114,11 @@ func main() {
 		switch subInput[0] {
 		// 在这里只需要 upload-file, get-file 是需要上下文操作的, 其他的命令只需要传递过去让server处理
 		case "%upload-file": // 上传文件
-			// 先发送命令
-			SendBytesToServer(conn, []byte(inputStr))
-			// 然后上传文件
-			// 可以同时上传多个文件
-			if len(subInput) >= 2 {
-				for _, filename := range subInput[1:] {
-					// 打开文件, 计算字节
-					fileByte, err := ioutil.ReadFile(filename)
-					if err != nil {
-						log.Fatal(err)
-					}
-					fileByteLen := len(fileByte)
-					preSend := BytesCombine(BytesCombine(IntToBytes(fileByteLen)), fileByte)
-					_, err = conn.Write(preSend)
-					if err != nil {
-						log.Fatal(err)
-					}
-				}
-				fmt.Println("send over !")
-			} else {
-				fmt.Println("文件上传失败, 请给出文件名, 可同时上传多个文件")
-			}
+			HandleUploadFileClient(conn, inputStr, subInput)
 
 		case "%get-file": // 下载文件
+			// 尝试
+			SendBytesToServer(conn, []byte(inputStr))
 
 		case "%exit": // 退出聊天室
 			return
@@ -104,11 +138,60 @@ func main() {
 	<-done
 }
 
+// 从客户端读取字节流
+func ReceiveByteFromClient(conn net.Conn) []byte {
+	// 先读取 4 字节, 作为长度
+	lengthByte := make([]byte, 4)
+	conn.Read(lengthByte)            // 忽略错误
+	length := BytesToInt(lengthByte) // int 类型的长度
+	// TODO: 注意这里如果是传输比较大的文件的话, 是否需要拆分成小的段?
+	inputByte := make([]byte, length) // 输入命令
+	length, _ = conn.Read(inputByte)  // 忽略错误
+	return inputByte
+}
+
+// 判断所给路径文件/文件夹是否存在
+func Exists(path string) bool {
+	_, err := os.Stat(path) //os.Stat获取文件信息
+	if err != nil {
+		if os.IsExist(err) {
+			return true
+		}
+		return false
+	}
+	return true
+}
+
+func HandleUploadFileClient(conn net.Conn, inputStr string, subInput []string) {
+	// 先发送命令
+	SendBytesToServer(conn, []byte(inputStr))
+	// 然后上传文件
+	// 可以同时上传多个文件
+	if len(subInput) >= 2 {
+		// TODO: 有的文件是不存在的, 需要加一个检测, 否则会终止程序
+		for _, filename := range subInput[1:] {
+			// 打开文件, 计算字节
+			fileByte, err := ioutil.ReadFile(filename)
+			if err != nil {
+				log.Fatal(err)
+			}
+			fileByteLen := len(fileByte)
+			preSend := BytesCombine(BytesCombine(IntToBytes(fileByteLen)), fileByte)
+			_, err = conn.Write(preSend)
+			if err != nil {
+				log.Fatal(err)
+			}
+		}
+	} else {
+		fmt.Println("文件上传失败, 请给出文件名, 可同时上传多个文件")
+	}
+}
+
 // 向服务器发送命令
 // 先计算数据长度, 然后拼接
 func SendBytesToServer(conn net.Conn, inputStrByte []byte) {
 	length := len(inputStrByte)
-	preSend := BytesCombine(BytesCombine(IntToBytes(length)), inputStrByte)
+	preSend := BytesCombine(IntToBytes(length), inputStrByte)
 	_, err := conn.Write(preSend)
 	if err != nil {
 		panic(err)
