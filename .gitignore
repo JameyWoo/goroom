@@ -2,3 +2,5 @@
 server/disk/
 client/disk
 *.pdf
+.idea/
+.vscode/
