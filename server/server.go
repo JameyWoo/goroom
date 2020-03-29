@@ -112,7 +112,7 @@ func handleConn(conn net.Conn) {
 		case "%set-name": // 设置用户的名字
 			if len(subInput) >= 2 { // 取 %set-name 之后的第一个字符串为名字
 				alias = subInput[1]
-				ch <- "设置用户名 \"" + alias + " \"成功!"
+				ch <- "设置用户名 \"" + alias + "\" 成功!"
 			} else {
 				ch <- "设置用户名失败! 请输入合法的用户名!"
 			}
