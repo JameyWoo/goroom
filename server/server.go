@@ -122,7 +122,7 @@ func handleConn(conn net.Conn) {
 				err := os.Mkdir("disk", os.ModePerm)
 				if err != nil {
 					log.Fatal(err)
-				}
+				} 
 			}
 			files, err := ioutil.ReadDir("./disk")
 			if err != nil {
