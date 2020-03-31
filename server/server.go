@@ -1,7 +1,7 @@
 package main
 
 import (
-	"../utils"
+	socketUtils "chatroom/socketUtils"
 	"fmt"
 	"io/ioutil"
 	"log"
@@ -90,7 +90,7 @@ func handleConn(conn net.Conn) {
 	entering <- ch // 表示新的用户进入了
 
 	for {
-		inputByte := utils.ReceiveBytesFromConn(conn)
+		inputByte := socketUtils.ReceiveBytesFromConn(conn)
 		inputStr := string(inputByte)
 		// 将输入解析, 如果是命令的格式, 那么以命令的方式传递
 		subInput := strings.Fields(inputStr)
@@ -118,11 +118,11 @@ func handleConn(conn net.Conn) {
 			}
 		case "%ls": // 列出聊天室中所有的文件
 			// TODO: 要注意这里如果在其他目录运行server.go, 这个目录还是否有效
-			if !utils.Exists("./disk") {
+			if !socketUtils.Exists("./disk") {
 				err := os.Mkdir("disk", os.ModePerm)
 				if err != nil {
 					log.Fatal(err)
-				} 
+				}
 			}
 			files, err := ioutil.ReadDir("./disk")
 			if err != nil {
@@ -156,14 +156,14 @@ func HandleUploadServer(subInput []string, conn net.Conn, ch client) {
 			// filename 需要经过解析. 以 " / " 作为分隔符
 			subFilename := strings.Split(filename, "/")
 			newFilename := "./disk/" + subFilename[len(subFilename)-1]
-			if !utils.Exists("./disk") {
+			if !socketUtils.Exists("./disk") {
 				// 如果 disk文件夹不存在, 那么创建
 				err := os.Mkdir("disk", os.ModePerm)
 				if err != nil {
 					log.Fatal(err)
 				}
 			}
-			if utils.Exists(newFilename) {
+			if socketUtils.Exists(newFilename) {
 				// 如果存在, 那么取消上传该文件并通报
 				ch <- "服务器上存在同名文件 \"" + subFilename[len(subFilename)-1] + " \", 将覆盖该文件!"
 				err := os.Remove(newFilename)
@@ -172,7 +172,7 @@ func HandleUploadServer(subInput []string, conn net.Conn, ch client) {
 				}
 			}
 			// 打开文件, 计算字节
-			fileByte := utils.ReceiveBytesFromConn(conn)
+			fileByte := socketUtils.ReceiveBytesFromConn(conn)
 			newFile, err := os.Create(newFilename)
 			if err != nil {
 				log.Fatal(err)
@@ -201,7 +201,7 @@ func handleDownloadServer(subInput []string, conn net.Conn, ch client, downloadi
 				continue
 			}
 			fileByteLen := len(fileByte)
-			preSend := utils.BytesCombine(utils.IntToBytes(fileByteLen), fileByte)
+			preSend := socketUtils.BytesCombine(socketUtils.IntToBytes(fileByteLen), fileByte)
 			_, err = conn.Write(preSend)
 			if err != nil {
 				log.Fatal(err)
@@ -219,7 +219,7 @@ func clientWriter(conn net.Conn, ch <-chan string) {
 	// * range 遍历, 当 ch 为空的时候, 这个语句会阻塞. 当 ch 得到了值, 他又会醒过来
 	for msg := range ch {
 		msgByte := []byte(msg)
-		msgByteNew := utils.BytesCombine(utils.IntToBytes(len(msgByte)), msgByte)
+		msgByteNew := socketUtils.BytesCombine(socketUtils.IntToBytes(len(msgByte)), msgByte)
 		conn.Write(msgByteNew)
 	}
 }

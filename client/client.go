@@ -16,8 +16,8 @@
 package main
 
 import (
-	"../utils"
 	"bufio"
+	socketUtils "chatroom/socketUtils"
 	"fmt"
 	"io/ioutil"
 	"log"
@@ -38,7 +38,7 @@ func main() {
 		panic(err)
 	}
 	done := make(chan struct{})
-	go HandleOutput(conn, done)  // 处理输出, 包括文件输出(下载)
+	go HandleOutput(conn, done) // 处理输出, 包括文件输出(下载)
 
 	// 这里不能使用 io.Copy 函数, 因为需要解析命令
 	input := bufio.NewScanner(os.Stdin)
@@ -56,7 +56,7 @@ func main() {
 
 		case "%download": // 下载文件
 			// 尝试
-			utils.SendBytesToConn(conn, []byte(inputStr))
+			socketUtils.SendBytesToConn(conn, []byte(inputStr))
 
 		case "%exit": // 退出聊天室
 			return
@@ -66,7 +66,7 @@ func main() {
 			fallthrough
 		default:
 			// 发送命令
-			utils.SendBytesToConn(conn, []byte(inputStr))
+			socketUtils.SendBytesToConn(conn, []byte(inputStr))
 		}
 	}
 	<-done
@@ -75,7 +75,7 @@ func main() {
 // 处理输出. 包括标准输出和文件输出
 func HandleOutput(conn net.Conn, done chan struct{}) {
 	for {
-		inputByte := utils.ReceiveBytesFromConn(conn)
+		inputByte := socketUtils.ReceiveBytesFromConn(conn)
 		inputStr := string(inputByte)
 		if len(inputStr) < 9 {
 			fmt.Println(inputStr)
@@ -99,7 +99,7 @@ func HandleDownload(inputStr string, conn net.Conn) {
 			fmt.Println("downloading " + filename + " ...")
 			// 首先判断文件是否存在, 如果存在那么无法写入
 			newFilename := "./disk/" + filename
-			if !utils.Exists("./disk") {
+			if !socketUtils.Exists("./disk") {
 				// 如果 disk文件夹不存在, 那么创建
 				err := os.Mkdir("disk", os.ModePerm)
 				if err != nil {
@@ -107,11 +107,11 @@ func HandleDownload(inputStr string, conn net.Conn) {
 				}
 			}
 			// 打开文件, 计算字节
-			fileByte := utils.ReceiveBytesFromConn(conn)
+			fileByte := socketUtils.ReceiveBytesFromConn(conn)
 			if len(fileByte) == 14 && string(fileByte) == "file not exist" {
 				fmt.Println("file \"" + filename + "\" not exist")
 			} else {
-				if utils.Exists(newFilename) {
+				if socketUtils.Exists(newFilename) {
 					// 如果存在, 那么取消上传该文件并通报
 					fmt.Println("客户端上存在同名文件 \"" + filename + " \", 继续将覆盖该文件!")
 					err := os.Remove(newFilename)
@@ -137,7 +137,7 @@ func HandleDownload(inputStr string, conn net.Conn) {
 
 func HandleUpload(conn net.Conn, inputStr string, subInput []string) {
 	// 先发送命令
-	utils.SendBytesToConn(conn, []byte(inputStr))
+	socketUtils.SendBytesToConn(conn, []byte(inputStr))
 	// 然后上传文件
 	// 可以同时上传多个文件
 	if len(subInput) >= 2 {
@@ -149,7 +149,7 @@ func HandleUpload(conn net.Conn, inputStr string, subInput []string) {
 				log.Fatal(err)
 			}
 			fileByteLen := len(fileByte)
-			preSend := utils.BytesCombine(utils.IntToBytes(fileByteLen), fileByte)
+			preSend := socketUtils.BytesCombine(socketUtils.IntToBytes(fileByteLen), fileByte)
 			_, err = conn.Write(preSend)
 			if err != nil {
 				log.Fatal(err)
