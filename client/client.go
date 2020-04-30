@@ -17,7 +17,7 @@ package main
 
 import (
 	"bufio"
-	socketUtils "chatroom/socketUtils"
+	socketUtils "github.com/JameyWoo/goroom/socketUtils"
 	"fmt"
 	"io/ioutil"
 	"log"

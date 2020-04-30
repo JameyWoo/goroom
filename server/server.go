@@ -1,7 +1,7 @@
 package main
 
 import (
-	socketUtils "chatroom/socketUtils"
+	socketUtils "github.com/JameyWoo/goroom/socketUtils"
 	"fmt"
 	"io/ioutil"
 	"log"
