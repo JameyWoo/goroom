@@ -1,8 +1,8 @@
 package main
 
 import (
-	socketUtils "github.com/JameyWoo/goroom/socketUtils"
 	"fmt"
+	socketUtils "github.com/JameyWoo/goroom/socketUtils"
 	"io/ioutil"
 	"log"
 	"net"
